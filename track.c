@@ -6,9 +6,11 @@
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <unistd.h>
 
 #define DEFAULT_TASK_DIRECTORY "./tasks/"
 #define DEFAULT_TASK_FILENAME "/task.md"
+#define DEFAULT_TIME_LABEL_FILENAME ".timelabel"
 
 #define da_append(xs, x)                                                             \
     do {                                                                             \
@@ -42,17 +44,11 @@ typedef struct {
 } Command;
 
 typedef struct {
-    int label1;
-    int label2;
-} TimeLabel;
-
-typedef struct {
     char* description;
     TaskStatus status;
     char* tags;
     int priority;
     char* path;
-    TimeLabel time_label;
 } Task;
 
 typedef struct {
@@ -187,8 +183,6 @@ bool write_task_to_file(char* filepath, Task* task, char* mode)
     fprintf(task_file, "%s\n", task_status_as_string(task->status));
     fprintf(task_file, "%s\n", task->tags);
     fprintf(task_file, "%d\n", task->priority);
-    fprintf(task_file, "%d\n", task->time_label.label1);
-    fprintf(task_file, "%d\n", task->time_label.label2);
 
     fclose(task_file);
     return true;
@@ -216,8 +210,6 @@ Task read_task_from_file(char* filepath)
 	else if (counter == 1) task.status = string_as_task_status(line);
 	else if (counter == 2) task.tags = strdup(line);
 	else if (counter == 3) task.priority = strtol(strdup(line), NULL, 10);
-	else if (counter == 4) task.time_label.label1 = strtol(strdup(line), NULL, 10);
-	else if (counter == 5) task.time_label.label2 = strtol(strdup(line), NULL, 10);
 	counter++;
     }
     fclose(task_file);
@@ -242,14 +234,21 @@ bool print_tasks()
 	if (strcmp(directory, ".")  == 0) continue;
 
 	char* path = malloc(strlen(DEFAULT_TASK_DIRECTORY) + strlen(directory) + strlen(DEFAULT_TASK_FILENAME) + 1);
-    
 	strcpy(path, DEFAULT_TASK_DIRECTORY);
 	strcat(path, directory);
+
+	// Copying directory path to save it later
+	char* dirpath = malloc(strlen(path) + 2);
+	strcpy(dirpath, path);
+	strcat(dirpath, "/");
+
 	strcat(path, DEFAULT_TASK_FILENAME);
 
 	Task task = read_task_from_file(path);
 	if (task.description == 0) continue; // can't properly read file 
-	task.path = strdup(path);
+	
+	// saving path to task directory
+	task.path = strdup(dirpath);
 	da_append(&tasks, task); // add each task to dynamic array
 	free(path);
     }
@@ -259,18 +258,49 @@ bool print_tasks()
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
 	printf("[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(task.status), task.tags, task.description);
+
+
+	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
+	strcpy(time_label_filepath, task.path);
+	strcat(time_label_filepath, DEFAULT_TIME_LABEL_FILENAME);
+
+	if (access(time_label_filepath, F_OK) == 0) {
+	    FILE* time_label_file = fopen(time_label_filepath, "r");
+	    if (time_label_file == NULL) {
+		printf("Couldn't open file %s: %s\n", time_label_filepath, strerror(errno));
+		return false;
+	    }    
+	    char* line = NULL;
+	    size_t n = 0;
+	    ssize_t read;
+	    int counter = 0;
+
+	    int label0 = 0;
+	    int label1 = 0;
+	    int seconds_delta = 0;
+
+	    while ((read = getline(&line, &n, time_label_file)) != -1) {
+		line[strlen(line) - 1] = '\0';
+		if (counter % 2 == 0) {
+		    label0 = strtol(strdup(line), NULL, 10); 
+		} else {
+		    label1 = strtol(strdup(line), NULL, 10);
+		    seconds_delta += difftime(label1, label0);
+		}
+		counter++;
+	    }
 	
-	TimeLabel time_label = task.time_label; 
-	if (time_label.label1 == 0) continue; // skip if no label on task yet
-	Timestamp timestamp = {0};
-	if (time_label.label2 == 0) {
-	    time_t timer = time(NULL);
-	    double delta = difftime(timer, time_label.label1);
-	    convert_seconds_to_timestamp(&timestamp, (int)delta);
-	    printf("Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
-	} else {
-	    int delta = difftime(time_label.label2, time_label.label1);
-	    convert_seconds_to_timestamp(&timestamp, delta);
+	    // if label0 was set, but not label1 
+	    if (label0 > label1) {
+		seconds_delta += difftime(time(NULL), label0);
+		printf("[Active] ");
+	    }
+
+	    Timestamp timestamp = {0};
+	    convert_seconds_to_timestamp(&timestamp, seconds_delta);
+	    fclose(time_label_file);
+	    free(line);
+
 	    printf("Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
 	}
     }
@@ -289,7 +319,7 @@ bool create_task(int priority, char* description, char* tags)
     mkdir_if_not_exists(path);
 
     strcat(path, DEFAULT_TASK_FILENAME);
-    Task task = {description, TASK_OPEN, tags, priority, path, {0}};
+    Task task = {description, TASK_OPEN, tags, priority, path};
     bool write_result = write_task_to_file(path, &task, "w");
     if (!write_result) return false;
 
@@ -298,17 +328,19 @@ bool create_task(int priority, char* description, char* tags)
     return true;
 }
 
-bool update_label(char* filepath)
+bool update_label(char* dirpath)
 {
-    Task task = read_task_from_file(filepath);
-    if (task.description == 0) return false;
-    TimeLabel label = task.time_label;
+    char* path = strdup(dirpath);
+    strcat(path, DEFAULT_TIME_LABEL_FILENAME);
+    FILE* time_label_file = fopen(path, "a+");
+    if (time_label_file == NULL) {
+	// return 0-defined structure on error
+	printf("Couldn't open file %s: %s\n", path, strerror(errno));
+	return false;
+    }
+    fprintf(time_label_file, "%d\n", (int)time(NULL));
 
-    if   (label.label1 == 0) label.label1 = time(NULL);
-    else label.label2 = time(NULL);
-    task.time_label = label;
-    write_task_to_file(filepath, &task, "r+");
-
+    fclose(time_label_file);
     return true;
 }
 
