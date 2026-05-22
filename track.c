@@ -31,6 +31,7 @@ typedef enum {
     COMMAND_CREATE,
     COMMAND_LS,
     COMMAND_INIT,
+    COMMAND_LABEL,
     COMMAND_UNKNOWN
 } CommandType;
 
@@ -41,11 +42,17 @@ typedef struct {
 } Command;
 
 typedef struct {
+    int label1;
+    int label2;
+} TimeLabel;
+
+typedef struct {
     char* description;
     TaskStatus status;
     char* tags;
     int priority;
     char* path;
+    TimeLabel time_label;
 } Task;
 
 typedef struct {
@@ -53,6 +60,13 @@ typedef struct {
     size_t count;
     size_t capacity;
 } Tasks;
+
+typedef struct {
+    int days;
+    int hours;
+    int minutes;
+    int seconds;
+} Timestamp;
 
 bool mkdir_if_not_exists(char* filepath)
 {
@@ -102,6 +116,9 @@ char* command_type_as_string(CommandType command)
 	case COMMAND_INIT:
 	    return "init";
 	    break;
+	case COMMAND_LABEL:
+	    return "label";
+	    break;
 	default:
 	    return "unknown";
 	    break;
@@ -113,6 +130,7 @@ CommandType string_as_command_type(char* string)
     if (strcmp(string, "create") == 0)  return COMMAND_CREATE;
     if (strcmp(string, "ls") == 0) 	return COMMAND_LS;
     if (strcmp(string, "init") == 0) 	return COMMAND_INIT;
+    if (strcmp(string, "label") == 0) 	return COMMAND_LABEL;
     return COMMAND_UNKNOWN;
 
 }
@@ -129,7 +147,7 @@ char* get_current_time()
 {
     time_t timer = time(NULL);
     struct tm tm_info = {0};
-    struct tm * tm_p = localtime(&timer);
+    struct tm* tm_p = localtime(&timer);
     if (tm_p) tm_info = *tm_p;
 
     int buffer_size = 1024;
@@ -139,9 +157,27 @@ char* get_current_time()
     return time_string;
 }
 
-bool write_task_to_file(char* filepath, Task* task)
+void convert_seconds_to_timestamp(Timestamp* timestamp, int seconds)
 {
-    FILE* task_file = fopen(filepath, "w");
+    int days = seconds / 86400;
+    seconds = seconds % 86400;
+
+    int hours = seconds / 3600;
+    seconds %= 3600;
+
+    int minutes = seconds / 60;
+    int secs = seconds % 60;
+
+    timestamp->days = days;
+    timestamp->hours = hours;
+    timestamp->minutes = minutes;
+    timestamp->seconds = secs;
+}
+
+
+bool write_task_to_file(char* filepath, Task* task, char* mode)
+{
+    FILE* task_file = fopen(filepath, mode);
     if (task_file == NULL) {
 	printf("Couldn't open file %s: %s\n", filepath, strerror(errno));
 	return false;
@@ -151,6 +187,8 @@ bool write_task_to_file(char* filepath, Task* task)
     fprintf(task_file, "%s\n", task_status_as_string(task->status));
     fprintf(task_file, "%s\n", task->tags);
     fprintf(task_file, "%d\n", task->priority);
+    fprintf(task_file, "%d\n", task->time_label.label1);
+    fprintf(task_file, "%d\n", task->time_label.label2);
 
     fclose(task_file);
     return true;
@@ -174,18 +212,12 @@ Task read_task_from_file(char* filepath)
 
     while ((read = getline(&line, &n, task_file)) != -1) {
 	line[strlen(line) - 1] = '\0';
-	if (counter == 0) {
-	    task.description = strdup(line);
-	}
-	if (counter == 1) {
-	    task.status = string_as_task_status(line);
-	}
-	if (counter == 2) {
-	    task.tags = strdup(line);
-	}
-	if (counter == 3) {
-	    task.priority = strtol(strdup(line), NULL, 10);
-	}
+	if 	(counter == 0) task.description = strdup(line);
+	else if (counter == 1) task.status = string_as_task_status(line);
+	else if (counter == 2) task.tags = strdup(line);
+	else if (counter == 3) task.priority = strtol(strdup(line), NULL, 10);
+	else if (counter == 4) task.time_label.label1 = strtol(strdup(line), NULL, 10);
+	else if (counter == 5) task.time_label.label2 = strtol(strdup(line), NULL, 10);
 	counter++;
     }
     fclose(task_file);
@@ -226,7 +258,21 @@ bool print_tasks()
 
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
-	printf("[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(task.status), task.tags, task.description);	
+	printf("[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(task.status), task.tags, task.description);
+	
+	TimeLabel time_label = task.time_label; 
+	if (time_label.label1 == 0) continue; // skip if no label on task yet
+	Timestamp timestamp = {0};
+	if (time_label.label2 == 0) {
+	    time_t timer = time(NULL);
+	    double delta = difftime(timer, time_label.label1);
+	    convert_seconds_to_timestamp(&timestamp, (int)delta);
+	    printf("Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
+	} else {
+	    int delta = difftime(time_label.label2, time_label.label1);
+	    convert_seconds_to_timestamp(&timestamp, delta);
+	    printf("Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
+	}
     }
 
     closedir(dir); 
@@ -243,11 +289,25 @@ bool create_task(int priority, char* description, char* tags)
     mkdir_if_not_exists(path);
 
     strcat(path, DEFAULT_TASK_FILENAME);
-    Task task = {description, TASK_OPEN, tags, priority, path};
-    bool write_result = write_task_to_file(path, &task);
+    Task task = {description, TASK_OPEN, tags, priority, path, {0}};
+    bool write_result = write_task_to_file(path, &task, "w");
     if (!write_result) return false;
 
     free(path);
+
+    return true;
+}
+
+bool update_label(char* filepath)
+{
+    Task task = read_task_from_file(filepath);
+    if (task.description == 0) return false;
+    TimeLabel label = task.time_label;
+
+    if   (label.label1 == 0) label.label1 = time(NULL);
+    else label.label2 = time(NULL);
+    task.time_label = label;
+    write_task_to_file(filepath, &task, "r+");
 
     return true;
 }
@@ -258,6 +318,7 @@ void print_help()
 	{COMMAND_CREATE, "<PRIORITY> <DESCRIPTION> <TAGS>", "creates new task with given priority, description and tags"},
 	{COMMAND_LS, "", "shows all available tasks"},
 	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
+	{COMMAND_LABEL, "<FILEPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
     };
 
     size_t commands_amount = sizeof(commands) / sizeof(commands[0]);
@@ -298,6 +359,10 @@ int main(int argc, char** argv)
 	    break;
 	case COMMAND_INIT:
 	    mkdir_if_not_exists(DEFAULT_TASK_DIRECTORY);
+	    break;
+	case COMMAND_LABEL:
+	    char* filepath = argv[2];
+	    update_label(filepath);
 	    break;
 	default:
 	    print_help();
