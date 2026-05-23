@@ -12,6 +12,14 @@
 #define DEFAULT_TASK_FILENAME "/task.md"
 #define DEFAULT_TIME_LABEL_FILENAME ".timelabel"
 
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_GREEN   "\x1b[32m"
+#define ANSI_COLOR_YELLOW  "\x1b[33m"
+#define ANSI_COLOR_BLUE    "\x1b[34m"
+#define ANSI_COLOR_MAGENTA "\x1b[35m"
+#define ANSI_COLOR_CYAN    "\x1b[36m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
+
 #define da_append(xs, x)                                                             \
     do {                                                                             \
         if ((xs)->count >= (xs)->capacity) {                                         \
@@ -22,6 +30,8 @@
                                                                                      \
         (xs)->items[(xs)->count++] = (x);                                            \
     } while (0)
+
+int NO_COLOR = 0;
 
 typedef enum {
     TASK_OPEN,
@@ -203,6 +213,58 @@ Task read_task_from_file(char* filepath)
     return task;
 }
 
+bool create_task(int priority, char* description, char* tags)
+{
+    char* current_time = get_current_time();
+    char* path = malloc(strlen(current_time) + strlen(DEFAULT_TASK_DIRECTORY) + strlen(DEFAULT_TASK_FILENAME) + 1);
+
+    strcpy(path, DEFAULT_TASK_DIRECTORY);
+    strcat(path, current_time);
+    bool status = mkdir_if_not_exists(path);
+    if (!status) return false;
+
+    strcat(path, DEFAULT_TASK_FILENAME);
+    Task task = {description, TASK_OPEN, tags, priority, path};
+    bool write_result = write_task_to_file(path, &task, "w");
+    if (!write_result) return false;
+
+    free(path);
+
+    return true;
+}
+
+bool update_label(char* dirpath)
+{
+    if (dirpath[strlen(dirpath) - 1] != '/') {
+	strcat(dirpath, "/");
+    }
+
+    DIR* dir = opendir(dirpath);
+    if 	 (dir != NULL) closedir(dir); 
+    else return false;
+
+    char* path = strdup(dirpath);
+    strcat(path, DEFAULT_TIME_LABEL_FILENAME);
+
+    FILE* time_label_file = fopen(path, "a+");
+    if (time_label_file == NULL) return false;
+    fprintf(time_label_file, "%d\n", (int)time(NULL));
+
+    fclose(time_label_file);
+    return true;
+}
+
+char* COLOR(char* str, char* color)
+{
+    if (!NO_COLOR) { 
+	int buffer_size = 1024;
+	char* colored_string = malloc(buffer_size); 
+	snprintf(colored_string, buffer_size, "%s%s%s", color, str, ANSI_COLOR_RESET); 
+	return colored_string;
+    }
+    return str;
+}
+
 bool print_tasks(FILE* stream)
 {
     Tasks tasks = {0};
@@ -282,7 +344,7 @@ bool print_tasks(FILE* stream)
 	    // if label0 was set, but not label1 
 	    if (label0 > label1) {
 		seconds_delta += difftime(time(NULL), label0);
-		fprintf(stream, "[Active] ");
+		fprintf(stream, "%s", COLOR("[Active] ", ANSI_COLOR_RED));
 	    }
 
 	    Timestamp timestamp = {0};
@@ -295,52 +357,11 @@ bool print_tasks(FILE* stream)
     return true;
 }
 
-bool create_task(int priority, char* description, char* tags)
-{
-    char* current_time = get_current_time();
-    char* path = malloc(strlen(current_time) + strlen(DEFAULT_TASK_DIRECTORY) + strlen(DEFAULT_TASK_FILENAME) + 1);
-
-    strcpy(path, DEFAULT_TASK_DIRECTORY);
-    strcat(path, current_time);
-    bool status = mkdir_if_not_exists(path);
-    if (!status) return false;
-
-    strcat(path, DEFAULT_TASK_FILENAME);
-    Task task = {description, TASK_OPEN, tags, priority, path};
-    bool write_result = write_task_to_file(path, &task, "w");
-    if (!write_result) return false;
-
-    free(path);
-
-    return true;
-}
-
-bool update_label(char* dirpath)
-{
-    if (dirpath[strlen(dirpath) - 1] != '/') {
-	strcat(dirpath, "/");
-    }
-
-    DIR* dir = opendir(dirpath);
-    if 	 (dir != NULL) closedir(dir); 
-    else return false;
-
-    char* path = strdup(dirpath);
-    strcat(path, DEFAULT_TIME_LABEL_FILENAME);
-
-    FILE* time_label_file = fopen(path, "a+");
-    if (time_label_file == NULL) return false;
-    fprintf(time_label_file, "%d\n", (int)time(NULL));
-
-    fclose(time_label_file);
-    return true;
-}
-
 void print_help(FILE* stream)
 {
     Command commands[] = {
 	{COMMAND_CREATE, "<PRIORITY> <DESCRIPTION> <TAGS>", "creates new task with given priority, description and tags"},
-	{COMMAND_LS, "", "shows all available tasks"},
+	{COMMAND_LS, "<OPTION>", "shows all available tasks. Available options: --no-color - turns off colors"},
 	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
 	{COMMAND_LABEL, "<DIRPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
     };
@@ -382,6 +403,9 @@ int main(int argc, char** argv)
 	    };
 	    break;
 	case COMMAND_LS:
+	    if (argc == 3) {
+		if (strcmp(argv[2], "--no-color") == 0) NO_COLOR = 1;
+	    }
 	    bool print_task_result = print_tasks(stream);
 	    if (!print_task_result) return 1;
 	    break;
