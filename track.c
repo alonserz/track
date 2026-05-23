@@ -67,20 +67,13 @@ typedef struct {
 bool mkdir_if_not_exists(char* filepath)
 {
     int result = mkdir(filepath, 0700);
-    if (result < 0) {
-	if (errno == EEXIST) {
-	    printf("Directory %s already exists\n", filepath);
-	} else {
-	    printf("Couldn't create directory %s: %s\n", filepath, strerror(errno));
-	}
-	return false;
-    }
+    if (result < 0) return false;
     return true;
 }
 
-char* task_status_as_string(TaskStatus status)
+char* task_status_as_string(TaskStatus* status)
 {
-    switch(status) {
+    switch(*status) {
 	case TASK_OPEN:
 	    return "OPEN";
 	    break;
@@ -100,9 +93,9 @@ TaskStatus string_as_task_status(char* string)
     return TASK_UNKNOWN;
 }
 
-char* command_type_as_string(CommandType command)
+char* command_type_as_string(CommandType* command)
 {
-    switch(command) {
+    switch(*command) {
 	case COMMAND_CREATE:
 	    return "create";
 	    break;
@@ -174,13 +167,10 @@ void convert_seconds_to_timestamp(Timestamp* timestamp, int seconds)
 bool write_task_to_file(char* filepath, Task* task, char* mode)
 {
     FILE* task_file = fopen(filepath, mode);
-    if (task_file == NULL) {
-	printf("Couldn't open file %s: %s\n", filepath, strerror(errno));
-	return false;
-    } 
+    if (task_file == NULL) return false;
 
     fprintf(task_file, "%s\n", task->description);
-    fprintf(task_file, "%s\n", task_status_as_string(task->status));
+    fprintf(task_file, "%s\n", task_status_as_string(&task->status));
     fprintf(task_file, "%s\n", task->tags);
     fprintf(task_file, "%d\n", task->priority);
 
@@ -198,11 +188,7 @@ Task read_task_from_file(char* filepath)
     Task task = {0};
 
     FILE* task_file = fopen(filepath, "r");
-    if (task_file == NULL) {
-	// return 0-defined structure on error
-	printf("Couldn't open file %s: %s\n", filepath, strerror(errno));
-	return task;
-    } 
+    if (task_file == NULL) return task;
 
     while ((read = getline(&line, &n, task_file)) != -1) {
 	line[strlen(line) - 1] = '\0';
@@ -217,13 +203,13 @@ Task read_task_from_file(char* filepath)
     return task;
 }
 
-bool print_tasks()
+bool print_tasks(FILE* stream)
 {
     Tasks tasks = {0};
     struct dirent* de;
     DIR* dir = opendir(DEFAULT_TASK_DIRECTORY);
     if (dir == NULL) {
-	printf("Couldn't open directory %s: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+	fprintf(stream, "Couldn't open directory %s: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
 	return false;
     }
 
@@ -245,12 +231,13 @@ bool print_tasks()
 	strcat(path, DEFAULT_TASK_FILENAME);
 
 	Task task = read_task_from_file(path);
-	if (task.description == 0) continue; // can't properly read file 
+	if (task.description == 0) continue;
 	
 	// saving path to task directory
 	task.path = strdup(dirpath);
 	da_append(&tasks, task); // add each task to dynamic array
 	free(path);
+	free(dirpath);
     }
 
     qsort(tasks.items, tasks.count, sizeof(Task), task_compare);
@@ -258,7 +245,7 @@ bool print_tasks()
 
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
-	printf("[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(task.status), task.tags, task.description);
+	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(&task.status), task.tags, task.description);
 
 	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
 	strcpy(time_label_filepath, task.path);
@@ -267,7 +254,7 @@ bool print_tasks()
 	if (access(time_label_filepath, F_OK) == 0) {
 	    FILE* time_label_file = fopen(time_label_filepath, "r");
 	    if (time_label_file == NULL) {
-		printf("Couldn't open file %s: %s\n", time_label_filepath, strerror(errno));
+		fprintf(stream, "Couldn't open file %s: %s\n", time_label_filepath, strerror(errno));
 		return false;
 	    }    
 	    char* line = NULL;
@@ -295,14 +282,14 @@ bool print_tasks()
 	    // if label0 was set, but not label1 
 	    if (label0 > label1) {
 		seconds_delta += difftime(time(NULL), label0);
-		printf("[Active] ");
+		fprintf(stream, "[Active] ");
 	    }
 
 	    Timestamp timestamp = {0};
 	    convert_seconds_to_timestamp(&timestamp, seconds_delta);
 	    free(line);
 
-	    printf("Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
+	    fprintf(stream, "Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
 	}
     }
     return true;
@@ -315,7 +302,8 @@ bool create_task(int priority, char* description, char* tags)
 
     strcpy(path, DEFAULT_TASK_DIRECTORY);
     strcat(path, current_time);
-    mkdir_if_not_exists(path);
+    bool status = mkdir_if_not_exists(path);
+    if (!status) return false;
 
     strcat(path, DEFAULT_TASK_FILENAME);
     Task task = {description, TASK_OPEN, tags, priority, path};
@@ -334,28 +322,21 @@ bool update_label(char* dirpath)
     }
 
     DIR* dir = opendir(dirpath);
-    if (dir != NULL) {
-	closedir(dir);
-    } else {
-	printf("Couldn't open directory %s: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
-	return false;
-    }
+    if 	 (dir != NULL) closedir(dir); 
+    else return false;
 
     char* path = strdup(dirpath);
     strcat(path, DEFAULT_TIME_LABEL_FILENAME);
 
     FILE* time_label_file = fopen(path, "a+");
-    if (time_label_file == NULL) {
-	printf("Couldn't open file %s: %s\n", path, strerror(errno));
-	return false;
-    }
+    if (time_label_file == NULL) return false;
     fprintf(time_label_file, "%d\n", (int)time(NULL));
 
     fclose(time_label_file);
     return true;
 }
 
-void print_help()
+void print_help(FILE* stream)
 {
     Command commands[] = {
 	{COMMAND_CREATE, "<PRIORITY> <DESCRIPTION> <TAGS>", "creates new task with given priority, description and tags"},
@@ -366,49 +347,61 @@ void print_help()
 
     size_t commands_amount = sizeof(commands) / sizeof(commands[0]);
 
-    printf("usage: track <COMMAND>\n");
-    printf("available commands:\n");
+    fprintf(stream, "usage: track <COMMAND>\n");
+    fprintf(stream, "available commands:\n");
 
     for (size_t i = 0; i < commands_amount; i++) {
-	printf("\t%s %s - %s\n", command_type_as_string(commands[i].type), commands[i].params, commands[i].description);
+	fprintf(stream, "\t%s %s - %s\n", command_type_as_string(&commands[i].type), commands[i].params, commands[i].description);
     }
 }
 
 int main(int argc, char** argv)
 {
     if (argc == 1) {
-	print_help();	
+	print_help(stdout);
 	return 1;
     }
 
+    FILE* stream = stdout;
     char* command_string = argv[1];
     CommandType command = string_as_command_type(command_string);
 
     switch (command) {
 	case COMMAND_CREATE:
 	    if (argc != 5) {
-		print_help();
+		print_help(stream);
 		return 1;
 	    }
 	    int priority = strtol(argv[2], NULL, 10);
 	    char* description = argv[3];
 	    char* tags = argv[4];
 	    bool create_task_result = create_task(priority, description, tags); 
-	    if (!create_task_result) return 1;
+	    if (!create_task_result) {
+		fprintf(stream, "Couldn't create task: %s\n", strerror(errno));
+		return 1;
+	    };
 	    break;
 	case COMMAND_LS:
-	    bool print_task_result = print_tasks();
+	    bool print_task_result = print_tasks(stream);
 	    if (!print_task_result) return 1;
 	    break;
 	case COMMAND_INIT:
-	    mkdir_if_not_exists(DEFAULT_TASK_DIRECTORY);
+	    bool mkdir_status = mkdir_if_not_exists(DEFAULT_TASK_DIRECTORY);
+	    if (!mkdir_status) {
+		fprintf(stream, "Couldn't initialize directory `%s`: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+		return 1;
+	    }
 	    break;
 	case COMMAND_LABEL:
 	    char* filepath = argv[2];
-	    update_label(filepath);
+	    bool update_label_status = update_label(filepath);
+	    if (!update_label_status) {
+		fprintf(stream, "Couldn't add new label to task `%s`: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+		return 1;
+	    }
 	    break;
 	default:
-	    print_help();
+	    print_help(stream);
 	    break;
     }
     return 0;
