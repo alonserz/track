@@ -209,7 +209,7 @@ Task read_task_from_file(char* filepath)
 	if 	(counter == 0) task.description = strdup(line);
 	else if (counter == 1) task.status = string_as_task_status(line);
 	else if (counter == 2) task.tags = strdup(line);
-	else if (counter == 3) task.priority = strtol(strdup(line), NULL, 10);
+	else if (counter == 3) task.priority = strtol(line, NULL, 10);
 	counter++;
     }
     fclose(task_file);
@@ -254,11 +254,11 @@ bool print_tasks()
     }
 
     qsort(tasks.items, tasks.count, sizeof(Task), task_compare);
+    closedir(dir); 
 
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
 	printf("[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(task.status), task.tags, task.description);
-
 
 	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
 	strcpy(time_label_filepath, task.path);
@@ -282,13 +282,15 @@ bool print_tasks()
 	    while ((read = getline(&line, &n, time_label_file)) != -1) {
 		line[strlen(line) - 1] = '\0';
 		if (counter % 2 == 0) {
-		    label0 = strtol(strdup(line), NULL, 10); 
+		    label0 = strtol(line, NULL, 10); 
 		} else {
-		    label1 = strtol(strdup(line), NULL, 10);
+		    label1 = strtol(line, NULL, 10);
 		    seconds_delta += difftime(label1, label0);
 		}
 		counter++;
 	    }
+
+	    fclose(time_label_file);
 	
 	    // if label0 was set, but not label1 
 	    if (label0 > label1) {
@@ -298,14 +300,11 @@ bool print_tasks()
 
 	    Timestamp timestamp = {0};
 	    convert_seconds_to_timestamp(&timestamp, seconds_delta);
-	    fclose(time_label_file);
 	    free(line);
 
 	    printf("Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
 	}
     }
-
-    closedir(dir); 
     return true;
 }
 
@@ -330,11 +329,23 @@ bool create_task(int priority, char* description, char* tags)
 
 bool update_label(char* dirpath)
 {
+    if (dirpath[strlen(dirpath) - 1] != '/') {
+	strcat(dirpath, "/");
+    }
+
+    DIR* dir = opendir(dirpath);
+    if (dir != NULL) {
+	closedir(dir);
+    } else {
+	printf("Couldn't open directory %s: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+	return false;
+    }
+
     char* path = strdup(dirpath);
     strcat(path, DEFAULT_TIME_LABEL_FILENAME);
+
     FILE* time_label_file = fopen(path, "a+");
     if (time_label_file == NULL) {
-	// return 0-defined structure on error
 	printf("Couldn't open file %s: %s\n", path, strerror(errno));
 	return false;
     }
@@ -350,7 +361,7 @@ void print_help()
 	{COMMAND_CREATE, "<PRIORITY> <DESCRIPTION> <TAGS>", "creates new task with given priority, description and tags"},
 	{COMMAND_LS, "", "shows all available tasks"},
 	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
-	{COMMAND_LABEL, "<FILEPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
+	{COMMAND_LABEL, "<DIRPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
     };
 
     size_t commands_amount = sizeof(commands) / sizeof(commands[0]);
