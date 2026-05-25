@@ -239,6 +239,7 @@ bool create_task(int priority, char* description, char* tags)
     if (!write_result) return false;
 
     free(path);
+    free(current_time);
 
     return true;
 }
@@ -261,6 +262,7 @@ bool update_label(char* dirpath)
     fprintf(time_label_file, "%d\n", (int)time(NULL));
 
     fclose(time_label_file);
+    free(path);
     return true;
 }
 
@@ -282,7 +284,8 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
     task.status = task_status;
     bool write_result = write_task_to_file(path, &task, "r+");
     if (!write_result) return false;
-    
+
+    free(path);
     return true;
 }
 
@@ -340,12 +343,15 @@ bool print_tasks(FILE* stream)
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
 	char* task_status = task_status_as_string(&task.status);
-	if (strcmp(task_status, "OPEN") == 0) {
-	    task_status = COLOR(task_status, ANSI_COLOR_GREEN);
-	} else {
-	    task_status = COLOR(task_status, ANSI_COLOR_RED);
-	}
-	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", COLOR(task.path, ANSI_COLOR_RED), task.priority, task_status, task.tags, task.description);
+
+	if (strcmp(task_status, "OPEN") == 0) task_status = COLOR(task_status, ANSI_COLOR_GREEN);
+	else task_status = COLOR(task_status, ANSI_COLOR_RED);
+
+	char* task_path = COLOR(task.path, ANSI_COLOR_RED); 
+	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", task_path, task.priority, task_status, task.tags, task.description);
+
+	free(task_path);
+	free(task_status);
 
 	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
 	strcpy(time_label_filepath, task.path);
@@ -356,7 +362,8 @@ bool print_tasks(FILE* stream)
 	    if (time_label_file == NULL) {
 		fprintf(stream, "Couldn't open file %s: %s\n", time_label_filepath, strerror(errno));
 		return false;
-	    }    
+	    }
+
 	    char* line = NULL;
 	    size_t n = 0;
 	    ssize_t read;
@@ -382,7 +389,9 @@ bool print_tasks(FILE* stream)
 	    // if label0 was set, but not label1 
 	    if (label0 > label1) {
 		seconds_delta += difftime(time(NULL), label0);
-		fprintf(stream, "%s", COLOR("[Active] ", ANSI_COLOR_BLUE));
+		char* active_prefix_string = COLOR("[Active] ", ANSI_COLOR_BLUE);
+		fprintf(stream, "%s", active_prefix_string);
+		free(active_prefix_string);
 	    }
 
 	    Timestamp timestamp = {0};
@@ -391,7 +400,13 @@ bool print_tasks(FILE* stream)
 
 	    fprintf(stream, "Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
 	}
+	free(time_label_filepath);
     }
+    // free dynamic array;
+    free(tasks.items);
+    tasks.items = NULL;
+    tasks.capacity = 0;
+    tasks.count = 0;
     return true;
 }
 
