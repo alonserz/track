@@ -44,6 +44,8 @@ typedef enum {
     COMMAND_LS,
     COMMAND_INIT,
     COMMAND_LABEL,
+    COMMAND_OPEN,
+    COMMAND_CLOSE,
     COMMAND_UNKNOWN
 } CommandType;
 
@@ -118,6 +120,12 @@ char* command_type_as_string(CommandType* command)
 	case COMMAND_LABEL:
 	    return "label";
 	    break;
+	case COMMAND_OPEN:
+	    return "open";
+	    break;
+	case COMMAND_CLOSE:
+	    return "close";
+	    break;
 	default:
 	    return "unknown";
 	    break;
@@ -130,6 +138,8 @@ CommandType string_as_command_type(char* string)
     if (strcmp(string, "ls") == 0) 	return COMMAND_LS;
     if (strcmp(string, "init") == 0) 	return COMMAND_INIT;
     if (strcmp(string, "label") == 0) 	return COMMAND_LABEL;
+    if (strcmp(string, "open") == 0) 	return COMMAND_OPEN;
+    if (strcmp(string, "close") == 0) 	return COMMAND_CLOSE;
     return COMMAND_UNKNOWN;
 
 }
@@ -254,6 +264,28 @@ bool update_label(char* dirpath)
     return true;
 }
 
+bool update_task_status(char* dirpath, TaskStatus task_status)
+{
+    if (dirpath[strlen(dirpath) - 1] != '/') {
+	strcat(dirpath, "/");
+    }
+
+    DIR* dir = opendir(dirpath);
+    if 	 (dir != NULL) closedir(dir); 
+    else return false;
+
+    char* path = strdup(dirpath);
+    strcat(path, DEFAULT_TASK_FILENAME);
+
+    Task task = read_task_from_file(path);
+    if (task.description == 0) return false;
+    task.status = task_status;
+    bool write_result = write_task_to_file(path, &task, "r+");
+    if (!write_result) return false;
+    
+    return true;
+}
+
 char* COLOR(char* str, char* color)
 {
     if (!NO_COLOR) { 
@@ -370,6 +402,8 @@ void print_help(FILE* stream)
 	{COMMAND_LS, "<OPTION>", "shows all available tasks. Available options: --no-color - turns off colors"},
 	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
 	{COMMAND_LABEL, "<DIRPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
+	{COMMAND_OPEN, "<DIRPATH>", "Set task status to OPEN"},
+	{COMMAND_CLOSE, "<DIRPATH>", "Set task status to CLOSED"},
     };
 
     size_t commands_amount = sizeof(commands) / sizeof(commands[0]);
@@ -423,10 +457,39 @@ int main(int argc, char** argv)
 	    }
 	    break;
 	case COMMAND_LABEL:
-	    char* filepath = argv[2];
-	    bool update_label_status = update_label(filepath);
+	    if (argc != 3) {
+		print_help(stream);
+		return 1;
+	    }
+	    char* dirpath = argv[2];
+	    bool update_label_status = update_label(dirpath);
 	    if (!update_label_status) {
 		fprintf(stream, "Couldn't add new label to task `%s`: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+		return 1;
+	    }
+	    break;
+	case COMMAND_OPEN:
+	    if (argc != 3) {
+		print_help(stream);
+		return 1;
+	    }
+	    char* task_open_dirpath = argv[2];
+	    bool open_task_result = update_task_status(task_open_dirpath, TASK_OPEN);
+
+	    if (!open_task_result) {
+		fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_open_dirpath, strerror(errno));
+		return 1;
+	    }
+	    break;
+	case COMMAND_CLOSE:
+	    if (argc != 3) {
+		print_help(stream);
+		return 1;
+	    }
+	    char* task_close_dirpath = argv[2];
+	    bool close_task_result = update_task_status(task_close_dirpath, TASK_CLOSED);
+	    if (!close_task_result) {
+		fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_close_dirpath, strerror(errno));
 		return 1;
 	    }
 	    break;
