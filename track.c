@@ -307,7 +307,13 @@ bool print_tasks(FILE* stream)
 
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
-	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", task.path, task.priority, task_status_as_string(&task.status), task.tags, task.description);
+	char* task_status = task_status_as_string(&task.status);
+	if (strcmp(task_status, "OPEN") == 0) {
+	    task_status = COLOR(task_status, ANSI_COLOR_GREEN);
+	} else {
+	    task_status = COLOR(task_status, ANSI_COLOR_RED);
+	}
+	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", COLOR(task.path, ANSI_COLOR_RED), task.priority, task_status, task.tags, task.description);
 
 	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
 	strcpy(time_label_filepath, task.path);
@@ -344,7 +350,7 @@ bool print_tasks(FILE* stream)
 	    // if label0 was set, but not label1 
 	    if (label0 > label1) {
 		seconds_delta += difftime(time(NULL), label0);
-		fprintf(stream, "%s", COLOR("[Active] ", ANSI_COLOR_RED));
+		fprintf(stream, "%s", COLOR("[Active] ", ANSI_COLOR_BLUE));
 	    }
 
 	    Timestamp timestamp = {0};
