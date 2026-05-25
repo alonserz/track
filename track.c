@@ -31,7 +31,7 @@
         (xs)->items[(xs)->count++] = (x);                                            \
     } while (0)
 
-int NO_COLOR = 0;
+static int NO_COLOR = 0;
 
 typedef enum {
     TASK_OPEN,
@@ -44,6 +44,8 @@ typedef enum {
     COMMAND_LS,
     COMMAND_INIT,
     COMMAND_LABEL,
+    COMMAND_OPEN,
+    COMMAND_CLOSE,
     COMMAND_UNKNOWN
 } CommandType;
 
@@ -118,6 +120,12 @@ char* command_type_as_string(CommandType* command)
 	case COMMAND_LABEL:
 	    return "label";
 	    break;
+	case COMMAND_OPEN:
+	    return "open";
+	    break;
+	case COMMAND_CLOSE:
+	    return "close";
+	    break;
 	default:
 	    return "unknown";
 	    break;
@@ -130,6 +138,8 @@ CommandType string_as_command_type(char* string)
     if (strcmp(string, "ls") == 0) 	return COMMAND_LS;
     if (strcmp(string, "init") == 0) 	return COMMAND_INIT;
     if (strcmp(string, "label") == 0) 	return COMMAND_LABEL;
+    if (strcmp(string, "open") == 0) 	return COMMAND_OPEN;
+    if (strcmp(string, "close") == 0) 	return COMMAND_CLOSE;
     return COMMAND_UNKNOWN;
 
 }
@@ -229,6 +239,7 @@ bool create_task(int priority, char* description, char* tags)
     if (!write_result) return false;
 
     free(path);
+    free(current_time);
 
     return true;
 }
@@ -251,18 +262,43 @@ bool update_label(char* dirpath)
     fprintf(time_label_file, "%d\n", (int)time(NULL));
 
     fclose(time_label_file);
+    free(path);
+    return true;
+}
+
+bool update_task_status(char* dirpath, TaskStatus task_status)
+{
+    if (dirpath[strlen(dirpath) - 1] != '/') {
+	strcat(dirpath, "/");
+    }
+
+    DIR* dir = opendir(dirpath);
+    if 	 (dir != NULL) closedir(dir); 
+    else return false;
+
+    char* path = strdup(dirpath);
+    strcat(path, DEFAULT_TASK_FILENAME);
+
+    Task task = read_task_from_file(path);
+    if (task.description == 0) return false;
+    task.status = task_status;
+    bool write_result = write_task_to_file(path, &task, "r+");
+    if (!write_result) return false;
+
+    free(path);
     return true;
 }
 
 char* COLOR(char* str, char* color)
 {
+    int buffer_size = 1024;
+    char* colored_string = malloc(buffer_size); 
     if (!NO_COLOR) { 
-	int buffer_size = 1024;
-	char* colored_string = malloc(buffer_size); 
 	snprintf(colored_string, buffer_size, "%s%s%s", color, str, ANSI_COLOR_RESET); 
-	return colored_string;
+    } else {
+	strcpy(colored_string, str);
     }
-    return str;
+    return colored_string;
 }
 
 bool print_tasks(FILE* stream)
@@ -308,12 +344,15 @@ bool print_tasks(FILE* stream)
     for (size_t i = 0; i < tasks.count; i++) {
 	Task task = tasks.items[i];
 	char* task_status = task_status_as_string(&task.status);
-	if (strcmp(task_status, "OPEN") == 0) {
-	    task_status = COLOR(task_status, ANSI_COLOR_GREEN);
-	} else {
-	    task_status = COLOR(task_status, ANSI_COLOR_RED);
-	}
-	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", COLOR(task.path, ANSI_COLOR_RED), task.priority, task_status, task.tags, task.description);
+
+	if (strcmp(task_status, "OPEN") == 0) task_status = COLOR(task_status, ANSI_COLOR_GREEN);
+	else task_status = COLOR(task_status, ANSI_COLOR_RED);
+
+	char* task_path = COLOR(task.path, ANSI_COLOR_RED); 
+	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", task_path, task.priority, task_status, task.tags, task.description);
+
+	free(task_path);
+	free(task_status);
 
 	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
 	strcpy(time_label_filepath, task.path);
@@ -324,7 +363,8 @@ bool print_tasks(FILE* stream)
 	    if (time_label_file == NULL) {
 		fprintf(stream, "Couldn't open file %s: %s\n", time_label_filepath, strerror(errno));
 		return false;
-	    }    
+	    }
+
 	    char* line = NULL;
 	    size_t n = 0;
 	    ssize_t read;
@@ -350,7 +390,9 @@ bool print_tasks(FILE* stream)
 	    // if label0 was set, but not label1 
 	    if (label0 > label1) {
 		seconds_delta += difftime(time(NULL), label0);
-		fprintf(stream, "%s", COLOR("[Active] ", ANSI_COLOR_BLUE));
+		char* active_prefix_string = COLOR("[Active] ", ANSI_COLOR_BLUE);
+		fprintf(stream, "%s", active_prefix_string);
+		free(active_prefix_string);
 	    }
 
 	    Timestamp timestamp = {0};
@@ -359,7 +401,13 @@ bool print_tasks(FILE* stream)
 
 	    fprintf(stream, "Time expired: %d days %d hours %d minutes %d seconds\n", timestamp.days, timestamp.hours, timestamp.minutes, timestamp.seconds);
 	}
+	free(time_label_filepath);
     }
+    // free dynamic array;
+    free(tasks.items);
+    tasks.items = NULL;
+    tasks.capacity = 0;
+    tasks.count = 0;
     return true;
 }
 
@@ -370,6 +418,8 @@ void print_help(FILE* stream)
 	{COMMAND_LS, "<OPTION>", "shows all available tasks. Available options: --no-color - turns off colors"},
 	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
 	{COMMAND_LABEL, "<DIRPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
+	{COMMAND_OPEN, "<DIRPATH>", "Set task status to OPEN"},
+	{COMMAND_CLOSE, "<DIRPATH>", "Set task status to CLOSED"},
     };
 
     size_t commands_amount = sizeof(commands) / sizeof(commands[0]);
@@ -423,10 +473,39 @@ int main(int argc, char** argv)
 	    }
 	    break;
 	case COMMAND_LABEL:
-	    char* filepath = argv[2];
-	    bool update_label_status = update_label(filepath);
+	    if (argc != 3) {
+		print_help(stream);
+		return 1;
+	    }
+	    char* dirpath = argv[2];
+	    bool update_label_status = update_label(dirpath);
 	    if (!update_label_status) {
 		fprintf(stream, "Couldn't add new label to task `%s`: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+		return 1;
+	    }
+	    break;
+	case COMMAND_OPEN:
+	    if (argc != 3) {
+		print_help(stream);
+		return 1;
+	    }
+	    char* task_open_dirpath = argv[2];
+	    bool open_task_result = update_task_status(task_open_dirpath, TASK_OPEN);
+
+	    if (!open_task_result) {
+		fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_open_dirpath, strerror(errno));
+		return 1;
+	    }
+	    break;
+	case COMMAND_CLOSE:
+	    if (argc != 3) {
+		print_help(stream);
+		return 1;
+	    }
+	    char* task_close_dirpath = argv[2];
+	    bool close_task_result = update_task_status(task_close_dirpath, TASK_CLOSED);
+	    if (!close_task_result) {
+		fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_close_dirpath, strerror(errno));
 		return 1;
 	    }
 	    break;
