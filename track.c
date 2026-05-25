@@ -31,7 +31,7 @@
         (xs)->items[(xs)->count++] = (x);                                            \
     } while (0)
 
-int NO_COLOR = 0;
+static int NO_COLOR = 0;
 
 typedef enum {
     TASK_OPEN,
@@ -291,13 +291,14 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
 
 char* COLOR(char* str, char* color)
 {
+    int buffer_size = 1024;
+    char* colored_string = malloc(buffer_size); 
     if (!NO_COLOR) { 
-	int buffer_size = 1024;
-	char* colored_string = malloc(buffer_size); 
 	snprintf(colored_string, buffer_size, "%s%s%s", color, str, ANSI_COLOR_RESET); 
-	return colored_string;
+    } else {
+	strcpy(colored_string, str);
     }
-    return str;
+    return colored_string;
 }
 
 bool print_tasks(FILE* stream)
