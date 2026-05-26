@@ -425,7 +425,7 @@ bool print_tasks(FILE* stream, Filter* filter)
 	else task_status = COLOR(task_status, ANSI_COLOR_RED);
 
 	char* task_path = COLOR(task.path, ANSI_COLOR_RED); 
-	fprintf(stream, "[%s] [%d] (%s) [%s] - %s\n", task_path, task.priority, task_status, task.tags, task.description);
+	fprintf(stream, "[%s] [priority: %d] (%s) [%s] - %s\n", task_path, task.priority, task_status, task.tags, task.description);
 
 	free(task_path);
 	free(task_status);
