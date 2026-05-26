@@ -49,6 +49,14 @@ typedef enum {
     COMMAND_UNKNOWN
 } CommandType;
 
+typedef enum {
+    OPERATOR_GE, // greater or equals
+    OPERATOR_LE, // less or equals
+    OPERATOR_EQ, // equals
+    OPERATOR_GT, // less than
+    OPERATOR_LT, // greater than
+} Operator;
+
 typedef struct {
     CommandType type;
     char* params;
@@ -75,6 +83,14 @@ typedef struct {
     int minutes;
     int seconds;
 } Timestamp;
+
+typedef struct {
+    TaskStatus status;
+    struct {
+	Operator operator;
+	int value;
+    } priority;
+} Filter;
 
 bool mkdir_if_not_exists(char* filepath)
 {
@@ -289,6 +305,65 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
     return true;
 }
 
+Filter parse_filter_options(char* filter_string)
+{
+    Filter filter = {0};
+    char* field = malloc(50);
+    char* operator = malloc(3);
+    char* value = malloc(10);
+    // filter string example:
+    // "priority > 50";
+    int result = sscanf(filter_string, "%s %[<>=] %s", field, operator, value);
+
+    if (result != 3) return filter;
+
+    if (strcmp(field, "priority") == 0) {
+	if 	(strcmp(operator, "<=") == 0) filter.priority.operator = OPERATOR_LE;
+	else if (strcmp(operator, "==") == 0) filter.priority.operator = OPERATOR_EQ;
+	else if (strcmp(operator, "<") == 0)  filter.priority.operator = OPERATOR_LT;
+	else if (strcmp(operator, ">") == 0)  filter.priority.operator = OPERATOR_GT;
+	else 	filter.priority.operator = OPERATOR_GE;
+	filter.priority.value = strtol(value, NULL, 10); 
+    } 
+
+    if (strcmp(field, "status")   == 0) filter.status = string_as_task_status(value);
+
+    free(field);
+    free(operator);
+    free(value);
+    
+    return filter;
+}
+
+bool filter_task(Task* task, Filter* filter)
+{
+    bool result = false;
+
+    if (filter->priority.operator == OPERATOR_LE) {
+	if (task->priority <= filter->priority.value) result = true;
+    }
+    else if (filter->priority.operator == OPERATOR_EQ) {
+	if (task->priority == filter->priority.value) result = true;
+    }
+    else if (filter->priority.operator == OPERATOR_GE) {
+	if (task->priority >= filter->priority.value) result = true;
+    }
+    else if (filter->priority.operator == OPERATOR_GT) {
+	if (task->priority > filter->priority.value) result = true;
+    }
+    else if (filter->priority.operator == OPERATOR_LT) {
+	if (task->priority < filter->priority.value) result = true;
+    }
+
+    if (filter->status == task->status) {
+	if (result) result = true;
+    } else {
+	result = false;
+    }
+
+    return result;
+}
+
 char* COLOR(char* str, char* color)
 {
     int buffer_size = 1024;
@@ -301,7 +376,7 @@ char* COLOR(char* str, char* color)
     return colored_string;
 }
 
-bool print_tasks(FILE* stream)
+bool print_tasks(FILE* stream, Filter* filter)
 {
     Tasks tasks = {0};
     struct dirent* de;
@@ -330,6 +405,7 @@ bool print_tasks(FILE* stream)
 
 	Task task = read_task_from_file(path);
 	if (task.description == 0) continue;
+	if (!filter_task(&task, filter)) continue;
 	
 	// saving path to task directory
 	task.path = strdup(dirpath);
@@ -415,9 +491,11 @@ void print_help(FILE* stream)
 {
     Command commands[] = {
 	{COMMAND_CREATE, "<PRIORITY> <DESCRIPTION> <TAGS>", "creates new task with given priority, description and tags"},
-	{COMMAND_LS, "<OPTION>", "shows all available tasks. Available options: --no-color - turns off colors"},
+	{COMMAND_LS, "<OPTION>", "shows all available tasks. \n\t\tAvailable options:\
+							     \n\t\t--no-color - turns off colors\
+							     \n\t\t--filter <<field> <operator> <value>> - filter output with given string. Example `--filter 'priority > 50'`"},
 	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
-	{COMMAND_LABEL, "<DIRPATH>", "If first label (line #5) equals to zero, set it to current unixtime. Otherwise updates second label (line #6)"},
+	{COMMAND_LABEL, "<DIRPATH>", "Update time label"},
 	{COMMAND_OPEN, "<DIRPATH>", "Set task status to OPEN"},
 	{COMMAND_CLOSE, "<DIRPATH>", "Set task status to CLOSED"},
     };
@@ -459,10 +537,16 @@ int main(int argc, char** argv)
 	    };
 	    break;
 	case COMMAND_LS:
-	    if (argc == 3) {
-		if (strcmp(argv[2], "--no-color") == 0) NO_COLOR = 1;
+	    Filter filter = { 0 };
+	    if (argc >= 3) {
+		for (size_t i = 0; i < (size_t)argc; i++) {
+		    if (strcmp(argv[i], "--no-color") == 0) NO_COLOR = 1;
+		    if (strcmp(argv[i], "--filter")   == 0) {
+			if ((size_t)(argc - 1) != i) filter = parse_filter_options(argv[i + 1]);
+		    } 
+		}
 	    }
-	    bool print_task_result = print_tasks(stream);
+	    bool print_task_result = print_tasks(stream, &filter);
 	    if (!print_task_result) return 1;
 	    break;
 	case COMMAND_INIT:
