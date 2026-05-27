@@ -622,7 +622,7 @@ int main(int argc, char** argv)
 	    char* task_close_dirpath = argv[2];
 	    bool close_task_result = update_task_status(task_close_dirpath, TASK_CLOSED);
 	    if (!close_task_result) {
-		fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_close_dirpath, strerror(errno));
+		fprintf(stream, "Couldn't set status CLOSED for task `%s`: %s\n", task_close_dirpath, strerror(errno));
 		return 1;
 	    }
 	    break;
