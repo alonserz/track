@@ -8,7 +8,7 @@
 #include <errno.h>
 #include <unistd.h>
 
-#define DEFAULT_TASK_DIRECTORY "./tasks/"
+#define DEFAULT_TASK_DIRECTORY "/tasks/"
 #define DEFAULT_TASK_FILENAME "/task.md"
 #define DEFAULT_TIME_LABEL_FILENAME ".timelabel"
 
@@ -53,8 +53,8 @@ typedef enum {
     OPERATOR_GE, // greater or equals
     OPERATOR_LE, // less or equals
     OPERATOR_EQ, // equals
-    OPERATOR_GT, // less than
-    OPERATOR_LT, // greater than
+    OPERATOR_GT, //greater than
+    OPERATOR_LT, // less than
 } Operator;
 
 typedef struct {
@@ -199,6 +199,30 @@ void convert_seconds_to_timestamp(Timestamp* timestamp, int seconds)
     timestamp->seconds = secs;
 }
 
+char* find_nearest_tasks_folder_upwards()
+{
+    char current_path[1024];
+    DIR* dir;
+    if (getcwd(current_path, sizeof(current_path)) == NULL) return NULL; 
+    // Get the current working directory
+    strcat(current_path, DEFAULT_TASK_DIRECTORY);
+    dir = opendir(current_path);
+    while (dir == NULL) {
+	if (chdir("..") != 0) return NULL;
+	if (getcwd(current_path, sizeof(current_path)) == NULL) return NULL;
+
+	if (strcmp(current_path, "/") == 0) {
+	    errno = ENOENT;
+	    return NULL;
+	}
+
+	strcat(current_path, DEFAULT_TASK_DIRECTORY);
+	dir = opendir(current_path);
+    }
+    closedir(dir);
+    char* path = strdup(current_path);
+    return path;
+}
 
 bool write_task_to_file(char* filepath, Task* task, char* mode)
 {
@@ -241,14 +265,16 @@ Task read_task_from_file(char* filepath)
 
 bool create_task(int priority, char* description, char* tags)
 {
-    char* current_time = get_current_time();
-    char* path = malloc(strlen(current_time) + strlen(DEFAULT_TASK_DIRECTORY) + strlen(DEFAULT_TASK_FILENAME) + 1);
 
-    strcpy(path, DEFAULT_TASK_DIRECTORY);
+    char* current_time = get_current_time();
+    char* nearest_tasks_folder_path = find_nearest_tasks_folder_upwards();
+    if (nearest_tasks_folder_path == NULL) return false;
+    char* path = malloc(strlen(nearest_tasks_folder_path) + strlen(current_time) + strlen(DEFAULT_TASK_FILENAME) + 1);
+    strcpy(path, nearest_tasks_folder_path);
     strcat(path, current_time);
+
     bool status = mkdir_if_not_exists(path);
     if (!status) return false;
-
     strcat(path, DEFAULT_TASK_FILENAME);
     Task task = {description, TASK_OPEN, tags, priority, path};
     bool write_result = write_task_to_file(path, &task, "w");
@@ -256,7 +282,7 @@ bool create_task(int priority, char* description, char* tags)
 
     free(path);
     free(current_time);
-
+    free(nearest_tasks_folder_path);
     return true;
 }
 
@@ -270,7 +296,8 @@ bool update_label(char* dirpath)
     if 	 (dir != NULL) closedir(dir); 
     else return false;
 
-    char* path = strdup(dirpath);
+    char* path = malloc(strlen(dirpath) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
+    strcpy(path, dirpath);
     strcat(path, DEFAULT_TIME_LABEL_FILENAME);
 
     FILE* time_label_file = fopen(path, "a+");
@@ -292,7 +319,8 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
     if 	 (dir != NULL) closedir(dir); 
     else return false;
 
-    char* path = strdup(dirpath);
+    char* path = malloc(strlen(dirpath) + strlen(DEFAULT_TASK_FILENAME) + 1);
+    strcpy(path, dirpath);
     strcat(path, DEFAULT_TASK_FILENAME);
 
     Task task = read_task_from_file(path);
@@ -355,11 +383,9 @@ bool filter_task(Task* task, Filter* filter)
 	if (task->priority < filter->priority.value) result = true;
     }
 
-    if (filter->status == task->status) {
+    if (filter->status == task->status)
 	if (result) result = true;
-    } else {
-	result = false;
-    }
+    else result = false;
 
     return result;
 }
@@ -380,9 +406,15 @@ bool print_tasks(FILE* stream, Filter* filter)
 {
     Tasks tasks = {0};
     struct dirent* de;
-    DIR* dir = opendir(DEFAULT_TASK_DIRECTORY);
-    if (dir == NULL) {
+    char* nearest_tasks_folder_path = find_nearest_tasks_folder_upwards();
+    if (nearest_tasks_folder_path == NULL) {
 	fprintf(stream, "Couldn't open directory %s: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+	return false;
+    }
+
+    DIR* dir = opendir(nearest_tasks_folder_path);
+    if (dir == NULL) {
+	fprintf(stream, "Couldn't open directory %s: %s\n", nearest_tasks_folder_path, strerror(errno));
 	return false;
     }
 
@@ -392,8 +424,8 @@ bool print_tasks(FILE* stream, Filter* filter)
 	if (strcmp(directory, "..") == 0) continue;
 	if (strcmp(directory, ".")  == 0) continue;
 
-	char* path = malloc(strlen(DEFAULT_TASK_DIRECTORY) + strlen(directory) + strlen(DEFAULT_TASK_FILENAME) + 1);
-	strcpy(path, DEFAULT_TASK_DIRECTORY);
+	char* path = malloc(strlen(nearest_tasks_folder_path) + strlen(directory) + strlen(DEFAULT_TASK_FILENAME) + 1);
+	strcpy(path, nearest_tasks_folder_path);
 	strcat(path, directory);
 
 	// Copying directory path to save it later
@@ -550,9 +582,9 @@ int main(int argc, char** argv)
 	    if (!print_task_result) return 1;
 	    break;
 	case COMMAND_INIT:
-	    bool mkdir_status = mkdir_if_not_exists(DEFAULT_TASK_DIRECTORY);
+	    bool mkdir_status = mkdir_if_not_exists("."DEFAULT_TASK_DIRECTORY);
 	    if (!mkdir_status) {
-		fprintf(stream, "Couldn't initialize directory `%s`: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+		fprintf(stream, "Couldn't initialize directory `%s`: %s\n", "."DEFAULT_TASK_DIRECTORY, strerror(errno));
 		return 1;
 	    }
 	    break;
@@ -564,7 +596,7 @@ int main(int argc, char** argv)
 	    char* dirpath = argv[2];
 	    bool update_label_status = update_label(dirpath);
 	    if (!update_label_status) {
-		fprintf(stream, "Couldn't add new label to task `%s`: %s\n", DEFAULT_TASK_DIRECTORY, strerror(errno));
+		fprintf(stream, "Couldn't add new label to task `%s`: %s\n", dirpath, strerror(errno));
 		return 1;
 	    }
 	    break;
