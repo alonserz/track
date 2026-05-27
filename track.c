@@ -354,7 +354,7 @@ Filter parse_filter_options(char* filter_string)
 	filter.priority.value = strtol(value, NULL, 10); 
     } 
 
-    if (strcmp(field, "status")   == 0) filter.status = string_as_task_status(value);
+    if (strcmp(field, "status") == 0) filter.status = string_as_task_status(value);
 
     free(field);
     free(operator);
@@ -383,8 +383,9 @@ bool filter_task(Task* task, Filter* filter)
 	if (task->priority < filter->priority.value) result = true;
     }
 
-    if (filter->status == task->status)
-	if (result) result = true;
+    if (filter->status == task->status) {
+	if (result) result = true;  
+    }
     else result = false;
 
     return result;
