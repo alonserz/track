@@ -16,10 +16,10 @@ cc track.c -o track -Wall -Wextra
 Filter string consists of: `<<field> <operator> <value>>`. Whitespaces are mandatory.\
 Possible fields: `status`, `tags`, `priority`.\
 Possible operators: `<`, `>`, `<=`, `>=`, `=`.\
-Possible values:\
-- `CLOSED` or `OP\EN` if field equals to `status`\
-- Any integer value if field equals to `priority`\
-- Any tag if field equals to `tags`.\
+Possible values:
+- `CLOSED` or `OPEN` if field equals to `status`
+- Any integer value if field equals to `priority`
+- Any tag if field equals to `tags`.
 ### Example: 
 ```
 track ls --filter "status = CLOSED"
