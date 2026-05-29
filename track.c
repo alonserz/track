@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #define DEFAULT_TASK_DIRECTORY "/tasks/"
 #define DEFAULT_TASK_FILENAME "/task.md"
@@ -31,6 +32,14 @@
         (xs)->items[(xs)->count++] = (x);                                            \
     } while (0)
 
+#define da_free(xs)         \
+    do {                    \
+	free((xs)->items);  \
+	(xs)->items = NULL; \
+	(xs)->count = 0;    \
+	(xs)->capacity = 0; \
+    } while (0)
+
 static int NO_COLOR = 0;
 
 typedef enum {
@@ -53,7 +62,7 @@ typedef enum {
     OPERATOR_GE, // greater or equals
     OPERATOR_LE, // less or equals
     OPERATOR_EQ, // equals
-    OPERATOR_GT, //greater than
+    OPERATOR_GT, // greater than
     OPERATOR_LT, // less than
 } Operator;
 
@@ -64,9 +73,15 @@ typedef struct {
 } Command;
 
 typedef struct {
+    char** items;
+    size_t count;
+    size_t capacity;
+} Tags;
+
+typedef struct {
     char* description;
     TaskStatus status;
-    char* tags;
+    Tags tags;
     int priority;
     char* path;
 } Task;
@@ -90,6 +105,7 @@ typedef struct {
 	Operator operator;
 	int value;
     } priority;
+    Tags tags;
 } Filter;
 
 bool mkdir_if_not_exists(char* filepath)
@@ -224,48 +240,70 @@ char* find_nearest_tasks_folder_upwards()
     return path;
 }
 
-bool write_task_to_file(char* filepath, Task* task, char* mode)
+char* rltrim(char* s)
+{
+    while(isspace(*s)) s++;
+    char* back = s + strlen(s);
+    while(isspace(*--back));
+    *(back+1) = '\0';
+    return s;
+}
+
+void parse_tags_string_into_struct(Tags* tags, char* tags_string)
+{
+    char* token = strtok(tags_string, ",");
+    while (token != NULL) {
+	da_append(tags, rltrim(token));
+	token = strtok(NULL, ",");
+    }
+    free(token);
+}
+
+bool write_task_to_file(Task* task, char* filepath, char* mode)
 {
     FILE* task_file = fopen(filepath, mode);
     if (task_file == NULL) return false;
 
     fprintf(task_file, "%s\n", task->description);
     fprintf(task_file, "%s\n", task_status_as_string(&task->status));
-    fprintf(task_file, "%s\n", task->tags);
+    fprintf(task_file, "%s", task->tags.items[0]);
+
+    for (size_t i = 1; i < task->tags.count; i++) {
+	fprintf(task_file, ", %s", task->tags.items[i]);
+    }
+
+    fprintf(task_file, "\n");
     fprintf(task_file, "%d\n", task->priority);
 
     fclose(task_file);
     return true;
 }
 
-Task read_task_from_file(char* filepath)
+void read_task_from_file(Task* task, char* filepath)
 {
     char* line = NULL;
     size_t n = 0;
     ssize_t read;
     int counter = 0;
 
-    Task task = {0};
-
     FILE* task_file = fopen(filepath, "r");
-    if (task_file == NULL) return task;
+    if (task_file == NULL) return;
 
     while ((read = getline(&line, &n, task_file)) != -1) {
 	line[strlen(line) - 1] = '\0';
-	if 	(counter == 0) task.description = strdup(line);
-	else if (counter == 1) task.status = string_as_task_status(line);
-	else if (counter == 2) task.tags = strdup(line);
-	else if (counter == 3) task.priority = strtol(line, NULL, 10);
+	if 	(counter == 0) task->description = strdup(line);
+	else if (counter == 1) task->status = string_as_task_status(line);
+	else if (counter == 2) parse_tags_string_into_struct(&task->tags, strdup(line)); 
+	else if (counter == 3) task->priority = strtol(line, NULL, 10);
 	counter++;
     }
-    fclose(task_file);
+
     free(line);
-    return task;
+    fclose(task_file);
 }
 
-bool create_task(int priority, char* description, char* tags)
+bool create_task(int priority, char* description, char* tags_string)
 {
-
     char* current_time = get_current_time();
     char* nearest_tasks_folder_path = find_nearest_tasks_folder_upwards();
     if (nearest_tasks_folder_path == NULL) return false;
@@ -276,13 +314,18 @@ bool create_task(int priority, char* description, char* tags)
     bool status = mkdir_if_not_exists(path);
     if (!status) return false;
     strcat(path, DEFAULT_TASK_FILENAME);
+
+    Tags tags = {0};
+    parse_tags_string_into_struct(&tags, tags_string);
+    
     Task task = {description, TASK_OPEN, tags, priority, path};
-    bool write_result = write_task_to_file(path, &task, "w");
+    bool write_result = write_task_to_file(&task, path, "w");
     if (!write_result) return false;
 
     free(path);
     free(current_time);
     free(nearest_tasks_folder_path);
+    da_free(&tags);
     return true;
 }
 
@@ -323,44 +366,44 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
     strcpy(path, dirpath);
     strcat(path, DEFAULT_TASK_FILENAME);
 
-    Task task = read_task_from_file(path);
+    Task task = {0};
+    read_task_from_file(&task, path);
     if (task.description == 0) return false;
     task.status = task_status;
-    bool write_result = write_task_to_file(path, &task, "r+");
+    bool write_result = write_task_to_file(&task, path, "r+");
     if (!write_result) return false;
 
     free(path);
     return true;
 }
 
-Filter parse_filter_options(char* filter_string)
+void parse_filter_options(Filter* filter, char* filter_string)
 {
-    Filter filter = {0};
     char* field = malloc(50);
     char* operator = malloc(3);
-    char* value = malloc(10);
+    int n_consumed_characters = 0;
+    char* value;
     // filter string example:
     // "priority > 50";
-    int result = sscanf(filter_string, "%s %[<>=] %s", field, operator, value);
+    int result = sscanf(filter_string, "%s %[<>=] %n", field, operator, &n_consumed_characters);
+    value = filter_string + n_consumed_characters;
 
-    if (result != 3) return filter;
+    if (result != 2) return;
 
     if (strcmp(field, "priority") == 0) {
-	if 	(strcmp(operator, "<=") == 0) filter.priority.operator = OPERATOR_LE;
-	else if (strcmp(operator, "==") == 0) filter.priority.operator = OPERATOR_EQ;
-	else if (strcmp(operator, "<") == 0)  filter.priority.operator = OPERATOR_LT;
-	else if (strcmp(operator, ">") == 0)  filter.priority.operator = OPERATOR_GT;
-	else 	filter.priority.operator = OPERATOR_GE;
-	filter.priority.value = strtol(value, NULL, 10); 
+	if 	(strcmp(operator, "<=") == 0) filter->priority.operator = OPERATOR_LE;
+	else if (strcmp(operator, "==") == 0) filter->priority.operator = OPERATOR_EQ;
+	else if (strcmp(operator, "<") == 0)  filter->priority.operator = OPERATOR_LT;
+	else if (strcmp(operator, ">") == 0)  filter->priority.operator = OPERATOR_GT;
+	else 				      filter->priority.operator = OPERATOR_GE;
+	filter->priority.value = strtol(value, NULL, 10); 
     } 
 
-    if (strcmp(field, "status") == 0) filter.status = string_as_task_status(value);
+    if (strcmp(field, "status") == 0) filter->status = string_as_task_status(value);
+    if (strcmp(field, "tags") == 0) parse_tags_string_into_struct(&filter->tags, strdup(value));
 
     free(field);
     free(operator);
-    free(value);
-    
-    return filter;
 }
 
 bool filter_task(Task* task, Filter* filter)
@@ -388,6 +431,19 @@ bool filter_task(Task* task, Filter* filter)
     }
     else result = false;
 
+    size_t tags_counter = 0;
+    // Iterate through each tags in task and filter, add +1 to counter if tag in filter equals to tag in task
+    // task has all needed tags if counter equals to filter.tags.count 
+    for (size_t i = 0; i < task->tags.count; i++) {
+	for (size_t j = 0; j < filter->tags.count; j++) {
+	    if (strcmp(filter->tags.items[j], task->tags.items[i]) == 0) tags_counter++;
+	}
+    }
+
+    if (tags_counter == filter->tags.count) {
+	if (result) result = true;
+    }
+    else result = false;
     return result;
 }
 
@@ -436,7 +492,9 @@ bool print_tasks(FILE* stream, Filter* filter)
 
 	strcat(path, DEFAULT_TASK_FILENAME);
 
-	Task task = read_task_from_file(path);
+	Task task = {0};
+	read_task_from_file(&task, path);
+
 	if (task.description == 0) continue;
 	if (!filter_task(&task, filter)) continue;
 	
@@ -458,10 +516,21 @@ bool print_tasks(FILE* stream, Filter* filter)
 	else task_status = COLOR(task_status, ANSI_COLOR_RED);
 
 	char* task_path = COLOR(task.path, ANSI_COLOR_RED); 
-	fprintf(stream, "[%s] [priority: %d] (%s) [%s] - %s\n", task_path, task.priority, task_status, task.tags, task.description);
+	char* tags_string = malloc(task.tags.capacity);
+
+	strcpy(tags_string, task.tags.items[0]);
+
+	for (size_t i = 1; i < task.tags.count; i++) {
+	    strcat(tags_string, ", ");
+	    strcat(tags_string, task.tags.items[i]);
+	}
+
+	fprintf(stream, "[%s] [priority: %d] (%s) [%s] - %s\n", task_path, task.priority, task_status, tags_string, task.description);
 
 	free(task_path);
 	free(task_status);
+	free(tags_string);
+	da_free(&task.tags);
 
 	char* time_label_filepath = malloc(strlen(task.path) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
 	strcpy(time_label_filepath, task.path);
@@ -513,10 +582,7 @@ bool print_tasks(FILE* stream, Filter* filter)
 	free(time_label_filepath);
     }
     // free dynamic array;
-    free(tasks.items);
-    tasks.items = NULL;
-    tasks.capacity = 0;
-    tasks.count = 0;
+    da_free(&tasks);
     return true;
 }
 
@@ -570,12 +636,12 @@ int main(int argc, char** argv)
 	    };
 	    break;
 	case COMMAND_LS:
-	    Filter filter = { 0 };
+	    Filter filter = {0};
 	    if (argc >= 3) {
 		for (size_t i = 0; i < (size_t)argc; i++) {
 		    if (strcmp(argv[i], "--no-color") == 0) NO_COLOR = 1;
 		    if (strcmp(argv[i], "--filter")   == 0) {
-			if ((size_t)(argc - 1) != i) filter = parse_filter_options(argv[i + 1]);
+			if ((size_t)(argc - 1) != i) parse_filter_options(&filter, argv[i + 1]);
 		    } 
 		}
 	    }
