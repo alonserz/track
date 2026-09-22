@@ -64,7 +64,13 @@ typedef enum {
     OPERATOR_EQ, // equals
     OPERATOR_GT, // greater than
     OPERATOR_LT, // less than
+    OPERATOR_NE, // not equals
 } Operator;
+
+typedef enum {
+    FILTER_DESC,
+    FILTER_ASC,
+} FilterOrder;
 
 typedef struct {
     CommandType type;
@@ -106,6 +112,7 @@ typedef struct {
 	int value;
     } priority;
     Tags tags;
+    FilterOrder order;
 } Filter;
 
 bool mkdir_if_not_exists(char* filepath)
@@ -176,12 +183,29 @@ CommandType string_as_command_type(char* string)
 
 }
 
-int task_compare(const void* s1, const void* s2)
+int task_compare_asc(const void* s1, const void* s2)
+{
+    Task* t1 = (Task*)s1;
+    Task* t2 = (Task*)s2;
+
+    return (t1->priority - t2->priority);
+}
+
+int task_compare_desc(const void* s1, const void* s2)
 {
     Task* t1 = (Task*)s1;
     Task* t2 = (Task*)s2;
 
     return -1 * (t1->priority - t2->priority);
+}
+
+void tasks_sort(Tasks* tasks, FilterOrder order)
+{
+    if (order == FILTER_ASC) {
+	qsort(tasks->items, tasks->count, sizeof(Task), task_compare_asc);
+    } else {
+	qsort(tasks->items, tasks->count, sizeof(Task), task_compare_desc);
+    }
 }
 
 char* get_current_time()
@@ -331,12 +355,10 @@ bool create_task(int priority, char* description, char* tags_string)
 
 bool update_label(char* dirpath)
 {
-    if (dirpath[strlen(dirpath) - 1] != '/') {
-	strcat(dirpath, "/");
-    }
+    if (dirpath[strlen(dirpath) - 1] != '/') strcat(dirpath, "/");
 
     DIR* dir = opendir(dirpath);
-    if 	 (dir != NULL) closedir(dir); 
+    if (dir != NULL) closedir(dir); 
     else return false;
 
     char* path = malloc(strlen(dirpath) + strlen(DEFAULT_TIME_LABEL_FILENAME) + 1);
@@ -359,7 +381,7 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
     }
 
     DIR* dir = opendir(dirpath);
-    if 	 (dir != NULL) closedir(dir); 
+    if (dir != NULL) closedir(dir); 
     else return false;
 
     char* path = malloc(strlen(dirpath) + strlen(DEFAULT_TASK_FILENAME) + 1);
@@ -395,6 +417,7 @@ void parse_filter_options(Filter* filter, char* filter_string)
 	else if (strcmp(operator, "==") == 0) filter->priority.operator = OPERATOR_EQ;
 	else if (strcmp(operator, "<") == 0)  filter->priority.operator = OPERATOR_LT;
 	else if (strcmp(operator, ">") == 0)  filter->priority.operator = OPERATOR_GT;
+	else if (strcmp(operator, "!=") == 0) filter->priority.operator = OPERATOR_NE;
 	else 				      filter->priority.operator = OPERATOR_GE;
 	filter->priority.value = strtol(value, NULL, 10); 
     } 
@@ -424,6 +447,9 @@ bool filter_task(Task* task, Filter* filter)
     }
     else if (filter->priority.operator == OPERATOR_LT) {
 	if (task->priority < filter->priority.value) result = true;
+    }
+    else if (filter->priority.operator == OPERATOR_NE) {
+	if (task->priority != filter->priority.value) result = true;
     }
 
     if (filter->status == task->status) {
@@ -505,7 +531,7 @@ bool print_tasks(FILE* stream, Filter* filter)
 	free(dirpath);
     }
 
-    qsort(tasks.items, tasks.count, sizeof(Task), task_compare);
+    tasks_sort(&tasks, filter->order);
     closedir(dir); 
 
     for (size_t i = 0; i < tasks.count; i++) {
@@ -565,7 +591,7 @@ bool print_tasks(FILE* stream, Filter* filter)
 
 	    fclose(time_label_file);
 	
-	    // if label0 was set, but not label1 
+	    // if label0 was set, but not label1
 	    if (label0 > label1) {
 		seconds_delta += difftime(time(NULL), label0);
 		char* active_prefix_string = COLOR("[Active] ", ANSI_COLOR_BLUE);
@@ -589,14 +615,40 @@ bool print_tasks(FILE* stream, Filter* filter)
 void print_help(FILE* stream)
 {
     Command commands[] = {
-	{COMMAND_CREATE, "<PRIORITY> <DESCRIPTION> <TAGS>", "creates new task with given priority, description and tags"},
-	{COMMAND_LS, "<OPTION>", "shows all available tasks. \n\t\tAvailable options:\
-							     \n\t\t--no-color - turns off colors\
-							     \n\t\t--filter <<field> <operator> <value>> - filter output with given string. Example `--filter 'priority > 50'`"},
-	{COMMAND_INIT, "", "creates new directory `tasks` in current directory"},
-	{COMMAND_LABEL, "<DIRPATH>", "Update time label"},
-	{COMMAND_OPEN, "<DIRPATH>", "Set task status to OPEN"},
-	{COMMAND_CLOSE, "<DIRPATH>", "Set task status to CLOSED"},
+	{ 
+	    .type = COMMAND_CREATE, 
+	    .params = "<PRIORITY> <DESCRIPTION> <TAGS>",
+	    .description = "creates new task with given priority, description and tags"
+	},
+	{
+	    .type = COMMAND_LS,
+	    .params = "<OPTION>",
+	    .description = "shows all available tasks. \n\t\tAvailable options:\
+			     \n\t\t--no-color - turns off colors\
+			     \n\t\t--filter <<field> <operator> <value>> - filter output with given string. Example `--filter 'priority > 50'`\
+			     \n\t\t-a - orders by ascending\
+			     \n\t\t-d - orders by descending"
+	},
+	{
+	    .type = COMMAND_INIT,
+	    .params = "",
+	    .description = "creates new directory `tasks` in current directory"
+	},
+	{
+	    .type = COMMAND_LABEL,
+	    .params = "<DIRPATH>",
+	    .description = "Update time label"
+	},
+	{
+	    .type = COMMAND_OPEN,
+	    .params = "<DIRPATH>",
+	    .description = "Set task status to OPEN"
+	},
+	{
+	    .type = COMMAND_CLOSE,
+	    .params = "<DIRPATH>",
+	    .description = "Set task status to CLOSED"
+	},
     };
 
     size_t commands_amount = sizeof(commands) / sizeof(commands[0]);
@@ -609,92 +661,131 @@ void print_help(FILE* stream)
     }
 }
 
-int main(int argc, char** argv)
+int command_create_task(int argc, char** argv, FILE* stream)
 {
-    if (argc == 1) {
-	print_help(stdout);
+    if (argc != 5) {
+	print_help(stream);
 	return 1;
     }
 
+    int priority = strtol(argv[2], NULL, 10);
+    char* description = argv[3];
+    char* tags = argv[4];
+    bool create_task_result = create_task(priority, description, tags); 
+
+    if (!create_task_result) {
+	fprintf(stream, "Couldn't create task: %s\n", strerror(errno));
+	return 1;
+    }
+    
+    return 0;
+}
+
+int command_ls_tasks(int argc, char** argv, FILE* stream)
+{
+    Filter filter = {0};
+
+    if (argc >= 3) {
+	for (size_t i = 0; i < (size_t)argc; i++) {
+	    if (strcmp(argv[i], "--no-color") == 0) NO_COLOR = 1;
+	    if (strcmp(argv[i], "--filter")   == 0) {
+		if ((size_t)(argc - 1) != i) parse_filter_options(&filter, argv[i + 1]);
+	    } 
+	    if (strcmp(argv[i], "-a") == 0) filter.order = FILTER_ASC;
+	    if (strcmp(argv[i], "-d") == 0) filter.order = FILTER_DESC;
+	}
+    }
+    bool print_task_result = print_tasks(stream, &filter);
+    if (!print_task_result) return 1;
+
+    return 0;
+}
+
+int command_init_folder(FILE* stream)
+{
+    bool mkdir_status = mkdir_if_not_exists("."DEFAULT_TASK_DIRECTORY);
+    if (!mkdir_status) {
+	fprintf(stream, "Couldn't initialize directory `%s`: %s\n", "."DEFAULT_TASK_DIRECTORY, strerror(errno));
+	return 1;
+    }
+
+    return 0;
+}
+
+int command_label_timestamp(int argc, char** argv, FILE* stream)
+{
+    if (argc != 3) {
+	print_help(stream);
+	return 1;
+    }
+
+    char* dirpath = argv[2];
+    bool update_label_status = update_label(dirpath);
+    if (!update_label_status) {
+	fprintf(stream, "Couldn't add new label to task `%s`: %s\n", dirpath, strerror(errno));
+	return 1;
+    }
+    
+    return 0;
+}
+
+int command_update_task_status(int argc, char** argv, FILE* stream, TaskStatus status)
+{
+    if (argc != 3) {
+	print_help(stream);
+	return 1;
+    }
+
+    char* task_open_dirpath = argv[2];
+    bool open_task_result = update_task_status(task_open_dirpath, status);
+
+    if (!open_task_result) {
+	if (status == TASK_OPEN) {
+	    fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_open_dirpath, strerror(errno));
+	} else {
+	    fprintf(stream, "Couldn't set status CLOSED for task `%s`: %s\n", task_open_dirpath, strerror(errno));
+	}
+
+	return 1;
+    }
+
+    return 0;
+}
+
+int main(int argc, char** argv)
+{
     FILE* stream = stdout;
+    if (argc == 1) {
+	print_help(stream);
+	return 1;
+    }
+
     char* command_string = argv[1];
     CommandType command = string_as_command_type(command_string);
 
     switch (command) {
 	case COMMAND_CREATE:
-	    if (argc != 5) {
-		print_help(stream);
-		return 1;
-	    }
-	    int priority = strtol(argv[2], NULL, 10);
-	    char* description = argv[3];
-	    char* tags = argv[4];
-	    bool create_task_result = create_task(priority, description, tags); 
-	    if (!create_task_result) {
-		fprintf(stream, "Couldn't create task: %s\n", strerror(errno));
-		return 1;
-	    };
+	    command_create_task(argc, argv, stream);
 	    break;
 	case COMMAND_LS:
-	    Filter filter = {0};
-	    if (argc >= 3) {
-		for (size_t i = 0; i < (size_t)argc; i++) {
-		    if (strcmp(argv[i], "--no-color") == 0) NO_COLOR = 1;
-		    if (strcmp(argv[i], "--filter")   == 0) {
-			if ((size_t)(argc - 1) != i) parse_filter_options(&filter, argv[i + 1]);
-		    } 
-		}
-	    }
-	    bool print_task_result = print_tasks(stream, &filter);
-	    if (!print_task_result) return 1;
+	    command_ls_tasks(argc, argv, stream); 
 	    break;
 	case COMMAND_INIT:
-	    bool mkdir_status = mkdir_if_not_exists("."DEFAULT_TASK_DIRECTORY);
-	    if (!mkdir_status) {
-		fprintf(stream, "Couldn't initialize directory `%s`: %s\n", "."DEFAULT_TASK_DIRECTORY, strerror(errno));
-		return 1;
-	    }
+	    command_init_folder(stream); 
 	    break;
 	case COMMAND_LABEL:
-	    if (argc != 3) {
-		print_help(stream);
-		return 1;
-	    }
-	    char* dirpath = argv[2];
-	    bool update_label_status = update_label(dirpath);
-	    if (!update_label_status) {
-		fprintf(stream, "Couldn't add new label to task `%s`: %s\n", dirpath, strerror(errno));
-		return 1;
-	    }
+	    command_label_timestamp(argc, argv, stream); 
 	    break;
 	case COMMAND_OPEN:
-	    if (argc != 3) {
-		print_help(stream);
-		return 1;
-	    }
-	    char* task_open_dirpath = argv[2];
-	    bool open_task_result = update_task_status(task_open_dirpath, TASK_OPEN);
-
-	    if (!open_task_result) {
-		fprintf(stream, "Couldn't set status OPEN for task `%s`: %s\n", task_open_dirpath, strerror(errno));
-		return 1;
-	    }
+	    command_update_task_status(argc, argv, stream, TASK_OPEN);
 	    break;
 	case COMMAND_CLOSE:
-	    if (argc != 3) {
-		print_help(stream);
-		return 1;
-	    }
-	    char* task_close_dirpath = argv[2];
-	    bool close_task_result = update_task_status(task_close_dirpath, TASK_CLOSED);
-	    if (!close_task_result) {
-		fprintf(stream, "Couldn't set status CLOSED for task `%s`: %s\n", task_close_dirpath, strerror(errno));
-		return 1;
-	    }
+	    command_update_task_status(argc, argv, stream, TASK_CLOSED);
 	    break;
 	default:
 	    print_help(stream);
 	    break;
     }
+
     return 0;
 }
