@@ -407,7 +407,7 @@ void parse_filter_options(Filter* filter, char* filter_string)
     char* value;
     // filter string example:
     // "priority > 50";
-    int result = sscanf(filter_string, "%s %[<>=] %n", field, operator, &n_consumed_characters);
+    int result = sscanf(filter_string, "%s %[<>=!] %n", field, operator, &n_consumed_characters);
     value = filter_string + n_consumed_characters;
 
     if (result != 2) return;
