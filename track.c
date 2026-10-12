@@ -106,14 +106,21 @@ typedef struct {
 } Timestamp;
 
 typedef struct {
-    TaskStatus status;
-    struct {
-	Operator operator;
-	int value;
-    } priority;
-    Tags tags;
-    FilterOrder order;
+    char* field;
+    Operator operator;
+    union {
+	TaskStatus status;
+	Tags tags;
+	int priority;
+    } value;
 } Filter;
+
+typedef struct {
+    Filter* items;
+    FilterOrder order;
+    size_t count;
+    size_t capacity;
+} Filters;
 
 bool mkdir_if_not_exists(char* filepath)
 {
@@ -399,8 +406,9 @@ bool update_task_status(char* dirpath, TaskStatus task_status)
     return true;
 }
 
-void parse_filter_options(Filter* filter, char* filter_string)
+void parse_filter_options(Filters* filters, char* filter_string)
 {
+    Filter filter = {0};
     char* field = malloc(50);
     char* operator = malloc(3);
     int n_consumed_characters = 0;
@@ -411,65 +419,89 @@ void parse_filter_options(Filter* filter, char* filter_string)
     value = filter_string + n_consumed_characters;
 
     if (result != 2) return;
+    filter.field = field;
 
     if (strcmp(field, "priority") == 0) {
-	if 	(strcmp(operator, "<=") == 0) filter->priority.operator = OPERATOR_LE;
-	else if (strcmp(operator, "==") == 0) filter->priority.operator = OPERATOR_EQ;
-	else if (strcmp(operator, "<") == 0)  filter->priority.operator = OPERATOR_LT;
-	else if (strcmp(operator, ">") == 0)  filter->priority.operator = OPERATOR_GT;
-	else if (strcmp(operator, "!=") == 0) filter->priority.operator = OPERATOR_NE;
-	else 				      filter->priority.operator = OPERATOR_GE;
-	filter->priority.value = strtol(value, NULL, 10); 
+	if 	(strcmp(operator, "<=") == 0) filter.operator = OPERATOR_LE;
+	else if (strcmp(operator, "==") == 0) filter.operator = OPERATOR_EQ;
+	else if (strcmp(operator, "<") == 0)  filter.operator = OPERATOR_LT;
+	else if (strcmp(operator, ">") == 0)  filter.operator = OPERATOR_GT;
+	else if (strcmp(operator, "!=") == 0) filter.operator = OPERATOR_NE;
+	else 				      filter.operator = OPERATOR_GE;
+	filter.value.priority = strtol(value, NULL, 10); 
     } 
 
-    if (strcmp(field, "status") == 0) filter->status = string_as_task_status(value);
-    if (strcmp(field, "tags") == 0) parse_tags_string_into_struct(&filter->tags, strdup(value));
+    if (strcmp(field, "status") == 0) filter.value.status = string_as_task_status(value);
+    if (strcmp(field, "tags") == 0) parse_tags_string_into_struct(&filter.value.tags, strdup(value));
 
-    free(field);
+    da_append(filters, filter);
+
     free(operator);
 }
 
-bool filter_task(Task* task, Filter* filter)
+bool filter_task(Task* task, Filters* filters)
 {
-    bool result = false;
+    bool result = true;
 
-    if (filter->priority.operator == OPERATOR_LE) {
-	if (task->priority <= filter->priority.value) result = true;
-    }
-    else if (filter->priority.operator == OPERATOR_EQ) {
-	if (task->priority == filter->priority.value) result = true;
-    }
-    else if (filter->priority.operator == OPERATOR_GE) {
-	if (task->priority >= filter->priority.value) result = true;
-    }
-    else if (filter->priority.operator == OPERATOR_GT) {
-	if (task->priority > filter->priority.value) result = true;
-    }
-    else if (filter->priority.operator == OPERATOR_LT) {
-	if (task->priority < filter->priority.value) result = true;
-    }
-    else if (filter->priority.operator == OPERATOR_NE) {
-	if (task->priority != filter->priority.value) result = true;
-    }
+    if (filters->count == 0) {
+	if (task->status == TASK_CLOSED) return false;
+    };
 
-    if (filter->status == task->status) {
-	if (result) result = true;  
-    }
-    else result = false;
+    for (size_t i = 0; i < filters->count; i++) {
+	if (strcmp(filters->items[i].field, "priority") == 0) {
+	    switch (filters->items[i].operator) {
+		case OPERATOR_LE:
+		    if (!(task->priority <= filters->items[i].value.priority)) result = false;
+		    break;
+		case OPERATOR_EQ:
+		    if (!(task->priority == filters->items[i].value.priority)) result = false;
+		    break;
+		case OPERATOR_GE:
+		    if (!(task->priority >= filters->items[i].value.priority)) result = false;
+		    break;
+		case OPERATOR_GT:
+		    if (!(task->priority > filters->items[i].value.priority)) result = false;
+		    break;
+		case OPERATOR_LT:
+		    if (!(task->priority < filters->items[i].value.priority)) result = false;
+		    break;
+		case OPERATOR_NE:
+		    if (!(task->priority != filters->items[i].value.priority)) result = false;
+		    break;
+		default:
+		    result = false;
+		    break;
+	    }
+	    continue;
+	}
 
-    size_t tags_counter = 0;
-    // Iterate through each tags in task and filter, add +1 to counter if tag in filter equals to tag in task
-    // task has all needed tags if counter equals to filter.tags.count 
-    for (size_t i = 0; i < task->tags.count; i++) {
-	for (size_t j = 0; j < filter->tags.count; j++) {
-	    if (strcmp(filter->tags.items[j], task->tags.items[i]) == 0) tags_counter++;
+	if (strcmp(filters->items[i].field, "status") == 0) {
+	    if (filters->items[i].value.status == task->status) {
+		if (result) result = true;  
+		continue;
+	    }
+	    result = false;
+	    continue;
+	}
+
+	if (strcmp(filters->items[i].field, "tags") == 0) {
+	    size_t tags_counter = 0;
+	    // Iterate through each tags in task and filter, add +1 to counter if tag in filter equals to tag in task
+	    // task has all needed tags if counter equals to filter.tags.count 
+	    for (size_t task_idx = 0; task_idx < task->tags.count; task_idx++) {
+		for (size_t filter_idx = 0; filter_idx < filters->items[i].value.tags.count; filter_idx++) {
+		    if (strcmp(filters->items[i].value.tags.items[filter_idx], task->tags.items[task_idx]) == 0) tags_counter++;
+		}
+	    }
+
+	    if (tags_counter == filters->items[i].value.tags.count) {
+		if (result) result = true;
+		continue;
+	    }
+	    result = false;
 	}
     }
 
-    if (tags_counter == filter->tags.count) {
-	if (result) result = true;
-    }
-    else result = false;
     return result;
 }
 
@@ -485,7 +517,7 @@ char* COLOR(char* str, char* color)
     return colored_string;
 }
 
-bool print_tasks(FILE* stream, Filter* filter)
+bool print_tasks(FILE* stream, Filters* filters)
 {
     Tasks tasks = {0};
     struct dirent* de;
@@ -522,7 +554,7 @@ bool print_tasks(FILE* stream, Filter* filter)
 	read_task_from_file(&task, path);
 
 	if (task.description == 0) continue;
-	if (!filter_task(&task, filter)) continue;
+	if (!filter_task(&task, filters)) continue;
 	
 	// saving path to task directory
 	task.path = strdup(dirpath);
@@ -531,7 +563,7 @@ bool print_tasks(FILE* stream, Filter* filter)
 	free(dirpath);
     }
 
-    tasks_sort(&tasks, filter->order);
+    tasks_sort(&tasks, filters->order);
     closedir(dir); 
 
     for (size_t i = 0; i < tasks.count; i++) {
@@ -683,19 +715,19 @@ int command_create_task(int argc, char** argv, FILE* stream)
 
 int command_ls_tasks(int argc, char** argv, FILE* stream)
 {
-    Filter filter = {0};
+    Filters filters = {0};
 
     if (argc >= 3) {
 	for (size_t i = 0; i < (size_t)argc; i++) {
 	    if (strcmp(argv[i], "--no-color") == 0) NO_COLOR = 1;
 	    if (strcmp(argv[i], "--filter")   == 0) {
-		if ((size_t)(argc - 1) != i) parse_filter_options(&filter, argv[i + 1]);
+		if ((size_t)(argc - 1) != i) parse_filter_options(&filters, argv[i + 1]);
 	    } 
-	    if (strcmp(argv[i], "-a") == 0) filter.order = FILTER_ASC;
-	    if (strcmp(argv[i], "-d") == 0) filter.order = FILTER_DESC;
+	    if (strcmp(argv[i], "-a") == 0) filters.order = FILTER_ASC;
+	    if (strcmp(argv[i], "-d") == 0) filters.order = FILTER_DESC;
 	}
     }
-    bool print_task_result = print_tasks(stream, &filter);
+    bool print_task_result = print_tasks(stream, &filters);
     if (!print_task_result) return 1;
 
     return 0;
