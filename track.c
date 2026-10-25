@@ -68,6 +68,12 @@ typedef enum {
 } Operator;
 
 typedef enum {
+    STATUS,
+    PRIORITY,
+    TAGS,
+} Field;
+
+typedef enum {
     FILTER_DESC,
     FILTER_ASC,
 } FilterOrder;
@@ -106,7 +112,7 @@ typedef struct {
 } Timestamp;
 
 typedef struct {
-    char* field;
+    Field field;
     Operator operator;
     union {
 	TaskStatus status;
@@ -187,7 +193,6 @@ CommandType string_as_command_type(char* string)
     if (strcmp(string, "open") == 0) 	return COMMAND_OPEN;
     if (strcmp(string, "close") == 0) 	return COMMAND_CLOSE;
     return COMMAND_UNKNOWN;
-
 }
 
 int task_compare_asc(const void* s1, const void* s2)
@@ -419,9 +424,9 @@ void parse_filter_options(Filters* filters, char* filter_string)
     value = filter_string + n_consumed_characters;
 
     if (result != 2) return;
-    filter.field = field;
 
     if (strcmp(field, "priority") == 0) {
+	filter.field = PRIORITY;
 	if 	(strcmp(operator, "<=") == 0) filter.operator = OPERATOR_LE;
 	else if (strcmp(operator, "==") == 0) filter.operator = OPERATOR_EQ;
 	else if (strcmp(operator, "<") == 0)  filter.operator = OPERATOR_LT;
@@ -431,8 +436,14 @@ void parse_filter_options(Filters* filters, char* filter_string)
 	filter.value.priority = strtol(value, NULL, 10); 
     } 
 
-    if (strcmp(field, "status") == 0) filter.value.status = string_as_task_status(value);
-    if (strcmp(field, "tags") == 0) parse_tags_string_into_struct(&filter.value.tags, strdup(value));
+    if (strcmp(field, "status") == 0) {
+	filter.field = STATUS;
+	filter.value.status = string_as_task_status(value);
+    }
+    if (strcmp(field, "tags") == 0) {
+	filter.field = TAGS;
+	parse_tags_string_into_struct(&filter.value.tags, strdup(value));
+    }
 
     da_append(filters, filter);
 
@@ -442,13 +453,20 @@ void parse_filter_options(Filters* filters, char* filter_string)
 bool filter_task(Task* task, Filters* filters)
 {
     bool result = true;
+    bool isStatusFilterProvided = false;
 
     if (filters->count == 0) {
 	if (task->status == TASK_CLOSED) return false;
     };
 
     for (size_t i = 0; i < filters->count; i++) {
-	if (strcmp(filters->items[i].field, "priority") == 0) {
+	if (i == filters->count - 1 && filters->items[i].field != STATUS) {
+	    if (task->status == TASK_CLOSED && !isStatusFilterProvided) {
+		result = false;	
+	    }
+	}
+
+	if (filters->items[i].field == PRIORITY) {
 	    switch (filters->items[i].operator) {
 		case OPERATOR_LE:
 		    if (!(task->priority <= filters->items[i].value.priority)) result = false;
@@ -475,7 +493,8 @@ bool filter_task(Task* task, Filters* filters)
 	    continue;
 	}
 
-	if (strcmp(filters->items[i].field, "status") == 0) {
+	if (filters->items[i].field == STATUS) {
+	    isStatusFilterProvided = true;
 	    if (filters->items[i].value.status == task->status) {
 		if (result) result = true;  
 		continue;
@@ -484,7 +503,7 @@ bool filter_task(Task* task, Filters* filters)
 	    continue;
 	}
 
-	if (strcmp(filters->items[i].field, "tags") == 0) {
+	if (filters->items[i].field == TAGS) {
 	    size_t tags_counter = 0;
 	    // Iterate through each tags in task and filter, add +1 to counter if tag in filter equals to tag in task
 	    // task has all needed tags if counter equals to filter.tags.count 
